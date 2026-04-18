@@ -42,9 +42,12 @@ export default class MinecraftBundle extends EventEmitter {
 		const toDownload: BundleItem[] = [];
 		const toHash: BundleItem[] = [];          // files that exist & need hash verification
 
-		let replaceName = `${this.options.path}/`;
+		// Normalize to forward slashes so it matches file.path which is also
+		// normalized with .replace(/\\/g, '/') further down — on Windows
+		// options.path may still contain backslashes at this point.
+		let replaceName = `${this.options.path}/`.replace(/\\/g, '/');
 		if (this.options.instance) {
-			replaceName = `${this.options.path}/instances/${this.options.instance}/`;
+			replaceName = `${this.options.path}/instances/${this.options.instance}/`.replace(/\\/g, '/');
 		}
 		const ignoredList = this.options.ignored ?? [];
 
@@ -57,11 +60,15 @@ export default class MinecraftBundle extends EventEmitter {
 		 * (e.g. "config" must not match "config_backup/file.txt").
 		 */
 		const isIgnored = (relativePath: string): boolean => {
+			// Strip a leading slash that can appear on Linux/macOS when
+			// options.path uses a Windows-style drive letter (e.g. "C:/…")
+			// and path.resolve produces an absolute path starting with '/'.
+			const r = relativePath.replace(/^\//, '');
 			for (const entry of ignoredList) {
 				// Exact match (file entry, e.g. "options.txt")
-				if (relativePath === entry) return true;
+				if (r === entry) return true;
 				// Prefix match on a segment boundary (folder entry, e.g. "Distant_Horizons_server_data/…")
-				if (relativePath.startsWith(entry + '/')) return true;
+				if (r.startsWith(entry + '/')) return true;
 			}
 			return false;
 		};
