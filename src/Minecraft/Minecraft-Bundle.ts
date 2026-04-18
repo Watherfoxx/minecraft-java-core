@@ -81,13 +81,14 @@ export default class MinecraftBundle extends EventEmitter {
 				continue;
 			}
 
-			// Skip ignored files — checked BEFORE the existence test so that
-			// missing ignored files are never added to the download queue.
-			const relativePath = file.path.replace(replaceName, '');
-			if (isIgnored(relativePath)) continue;
-
 			let stat: fs.Stats | null = null;
 			try { stat = fs.statSync(file.path); } catch { /* does not exist */ }
+
+			// Skip ignored files ONLY if they already exist locally.
+			// If they are absent, fall through to toDownload so they get
+			// created on first launch like any other file.
+			const relativePath = file.path.replace(replaceName, '');
+			if (stat && isIgnored(relativePath)) continue;
 
 			if (!stat) {
 				toDownload.push(file);
