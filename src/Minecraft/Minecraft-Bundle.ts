@@ -46,7 +46,25 @@ export default class MinecraftBundle extends EventEmitter {
 		if (this.options.instance) {
 			replaceName = `${this.options.path}/instances/${this.options.instance}/`;
 		}
-		const ignoredSet = new Set(this.options.ignored);
+		const ignoredList = this.options.ignored ?? [];
+
+		/**
+		 * Returns true if `relativePath` matches an ignored entry.
+		 * An entry like "Distant_Horizons_server_data" must match both the
+		 * directory itself ("Distant_Horizons_server_data") AND any file
+		 * inside it ("Distant_Horizons_server_data/foo/bar.db").
+		 * Matching is done on full path segments to avoid false positives
+		 * (e.g. "config" must not match "config_backup/file.txt").
+		 */
+		const isIgnored = (relativePath: string): boolean => {
+			for (const entry of ignoredList) {
+				// Exact match (file entry, e.g. "options.txt")
+				if (relativePath === entry) return true;
+				// Prefix match on a segment boundary (folder entry, e.g. "Distant_Horizons_server_data/…")
+				if (relativePath.startsWith(entry + '/')) return true;
+			}
+			return false;
+		};
 
 		// ── Phase 1: synchronous fast-pass ─────────────────────────────
 		for (const file of bundle) {
@@ -63,6 +81,11 @@ export default class MinecraftBundle extends EventEmitter {
 				continue;
 			}
 
+			// Skip ignored files — checked BEFORE the existence test so that
+			// missing ignored files are never added to the download queue.
+			const relativePath = file.path.replace(replaceName, '');
+			if (isIgnored(relativePath)) continue;
+
 			let stat: fs.Stats | null = null;
 			try { stat = fs.statSync(file.path); } catch { /* does not exist */ }
 
@@ -70,10 +93,6 @@ export default class MinecraftBundle extends EventEmitter {
 				toDownload.push(file);
 				continue;
 			}
-
-			// Skip ignored files
-			const relativePath = file.path.replace(replaceName, '');
-			if (ignoredSet.has(relativePath)) continue;
 
 			if (file.sha1) {
 				// Quick size check: if size is known and doesn't match → skip hash, redownload
