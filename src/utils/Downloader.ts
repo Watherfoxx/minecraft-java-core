@@ -42,7 +42,7 @@ export default class Downloader extends EventEmitter {
 
 		const filePath = `${dirPath}/${fileName}`;
 		const writer = fs.createWriteStream(filePath);
-		const response = await fetch(url);
+		const response = await fetch(url, { cache: 'no-store' });
 
 		const contentLength = response.headers.get('content-length');
 		const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
@@ -145,7 +145,7 @@ export default class Downloader extends EventEmitter {
 				const tid = setTimeout(() => controller.abort(), timeout);
 
 				try {
-					const response = await fetch(file.url!, { signal: controller.signal });
+					const response = await fetch(file.url!, { signal: controller.signal, cache: 'no-store' });
 					clearTimeout(tid);
 
 					if (!file.size || file.size < SMALL_FILE_THRESHOLD) {

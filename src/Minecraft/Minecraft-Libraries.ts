@@ -133,7 +133,7 @@ export default class Libraries {
 	public async GetAssetsOthers(url: string | null): Promise<DownloadFile[]> {
 		if (!url) return [];
 
-		const response = await fetch(url);
+		const response = await fetch(url, { cache: 'no-store' });
 		const data: CustomAssetItem[] = await response.json();
 
 		const assets: DownloadFile[] = [];
