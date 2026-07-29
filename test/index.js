@@ -65,7 +65,6 @@ function buildLaunchOptions(instanceData, account) {
         version: instanceData.loader?.minecraft_version || instanceData.loadder.minecraft_version,
         intelEnabledMac: true,
         instance: instanceData.name,
-        ignore_log4j: true,
         ignored: instanceData.ignored,
         downloadFileMultiple: DOWNLOAD_SIMULTANEOUS,
         loader: {

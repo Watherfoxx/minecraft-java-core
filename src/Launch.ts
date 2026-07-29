@@ -224,7 +224,15 @@ export default class Launch extends EventEmitter {
 			loaderJson = jsonLoader;
 		}
 
-		if (this.options.verify) await bundle.checkFiles([...gameLibraries, ...gameAssetsOther, ...gameAssets, ...gameJava.files]);
+		if (this.options.verify) {
+			await bundle.checkFiles([
+				...gameLibraries,
+				...gameLogging,
+				...gameAssetsOther,
+				...gameAssets,
+				...gameJava.files
+			]);
+		}
 
 		const natives = await libraries.natives(gameLibraries);
 		if (natives.length === 0) json.nativesList = false;
