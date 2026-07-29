@@ -6,6 +6,7 @@
 import fs from 'fs';
 import os from 'os';
 import semver from 'semver';
+import { pathToFileURL } from 'url';
 import { getPathLibraries, isold } from '../utils/Index.js';
 import type {
 	LaunchOptions,
@@ -303,7 +304,8 @@ export default class MinecraftArguments {
 		if (versionJson.logging && versionJson.logging.client && !this.options.ignore_log4j) {
 			const logConfig = versionJson.logging.client;
 			const logConfigPath = `${this.options.path}/assets/log_configs/${logConfig.file.id}`;
-			jvmArgs.push(logConfig.argument.replace('${path}', logConfigPath));
+			const logConfigUrl = pathToFileURL(logConfigPath).href;
+			jvmArgs.push(logConfig.argument.replace('${path}', logConfigUrl));
 		}
 
 		// Process and add default-user-jvm arguments from version JSON
