@@ -25,6 +25,40 @@ export default class MinecraftBundle extends EventEmitter {
 		this.options = options;
 	}
 
+	private comparablePath(targetPath: string): string {
+		const resolvedPath = path.resolve(targetPath);
+		return process.platform === 'win32' ? resolvedPath.toLowerCase() : resolvedPath;
+	}
+
+	private isSamePathOrInside(parentPath: string, candidatePath: string): boolean {
+		const relativePath = path.relative(path.resolve(parentPath), path.resolve(candidatePath));
+		return relativePath === '' || (
+			relativePath !== '..'
+			&& !relativePath.startsWith(`..${path.sep}`)
+			&& !path.isAbsolute(relativePath)
+		);
+	}
+
+	private getInstanceRoot(): string {
+		return this.options.instance
+			? path.resolve(this.options.path, 'instances', this.options.instance)
+			: path.resolve(this.options.path);
+	}
+
+	private getIgnoredRoots(instanceRoot: string): string[] {
+		const roots = (this.options.ignored ?? [])
+			.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+			.map(entry => path.resolve(instanceRoot, entry))
+			// An ignored entry is instance-relative and must never escape that root.
+			.filter(ignoredRoot => this.isSamePathOrInside(instanceRoot, ignoredRoot));
+
+		return [...new Map(roots.map(root => [this.comparablePath(root), root])).values()];
+	}
+
+	private isExcludedPath(targetPath: string, excludedRoots: string[]): boolean {
+		return excludedRoots.some(root => this.isSamePathOrInside(root, targetPath));
+	}
+
 	/**
 	 * Checks each item in the provided bundle to see if it needs to be
 	 * downloaded or updated (e.g., if hashes don't match).
@@ -42,36 +76,11 @@ export default class MinecraftBundle extends EventEmitter {
 		const toDownload: BundleItem[] = [];
 		const toHash: BundleItem[] = [];          // files that exist & need hash verification
 
-		// Normalize to forward slashes so it matches file.path which is also
-		// normalized with .replace(/\\/g, '/') further down — on Windows
-		// options.path may still contain backslashes at this point.
-		let replaceName = `${this.options.path}/`.replace(/\\/g, '/');
-		if (this.options.instance) {
-			replaceName = `${this.options.path}/instances/${this.options.instance}/`.replace(/\\/g, '/');
-		}
-		const ignoredList = this.options.ignored ?? [];
-
-		/**
-		 * Returns true if `relativePath` matches an ignored entry.
-		 * An entry like "Distant_Horizons_server_data" must match both the
-		 * directory itself ("Distant_Horizons_server_data") AND any file
-		 * inside it ("Distant_Horizons_server_data/foo/bar.db").
-		 * Matching is done on full path segments to avoid false positives
-		 * (e.g. "config" must not match "config_backup/file.txt").
-		 */
-		const isIgnored = (relativePath: string): boolean => {
-			// Strip a leading slash that can appear on Linux/macOS when
-			// options.path uses a Windows-style drive letter (e.g. "C:/…")
-			// and path.resolve produces an absolute path starting with '/'.
-			const r = relativePath.replace(/^\//, '');
-			for (const entry of ignoredList) {
-				// Exact match (file entry, e.g. "options.txt")
-				if (r === entry) return true;
-				// Prefix match on a segment boundary (folder entry, e.g. "Distant_Horizons_server_data/…")
-				if (r.startsWith(entry + '/')) return true;
-			}
-			return false;
-		};
+		const instanceRoot = this.getInstanceRoot();
+		// Snapshot existence before processing the bundle. If an ignored root
+		// is absent, its files still go through the normal first-install path.
+		const existingIgnoredRoots = this.getIgnoredRoots(instanceRoot)
+			.filter(ignoredRoot => fs.existsSync(ignoredRoot));
 
 		// ── Phase 1: synchronous fast-pass ─────────────────────────────
 		for (const file of bundle) {
@@ -79,6 +88,10 @@ export default class MinecraftBundle extends EventEmitter {
 
 			file.path = path.resolve(this.options.path, file.path).replace(/\\/g, '/');
 			file.folder = file.path.split('/').slice(0, -1).join('/');
+
+			// Once an ignored file or directory exists, its whole subtree is
+			// preserved without stat calls or hashes for every child entry.
+			if (this.isExcludedPath(file.path, existingIgnoredRoots)) continue;
 
 			if (file.type === 'CFILE') {
 				if (!fs.existsSync(file.folder)) {
@@ -90,12 +103,6 @@ export default class MinecraftBundle extends EventEmitter {
 
 			let stat: fs.Stats | null = null;
 			try { stat = fs.statSync(file.path); } catch { /* does not exist */ }
-
-			// Skip ignored files ONLY if they already exist locally.
-			// If they are absent, fall through to toDownload so they get
-			// created on first launch like any other file.
-			const relativePath = file.path.replace(replaceName, '');
-			if (stat && isIgnored(relativePath)) continue;
 
 			if (!stat) {
 				toDownload.push(file);
@@ -178,38 +185,23 @@ export default class MinecraftBundle extends EventEmitter {
 			instancePath = `/instances/${this.options.instance}`;
 		}
 
-		// Gather all existing files in the relevant directory
-		const allFiles = this.options.instance
-			? this.getFiles(`${this.options.path}${instancePath}`)
-			: this.getFiles(this.options.path);
-
-		// Also gather files from "loader" and "runtime" directories to ignore
-		const ignoredFiles = [
-			...this.getFiles(`${this.options.path}/loader`),
-			...this.getFiles(`${this.options.path}/runtime`)
-		];
-
-		// Convert custom ignored paths to actual file paths
-		for (let ignoredPath of this.options.ignored) {
-			ignoredPath = `${this.options.path}${instancePath}/${ignoredPath}`;
-			if (fs.existsSync(ignoredPath)) {
-				if (fs.statSync(ignoredPath).isDirectory()) {
-					// If it's a directory, add all files within it
-					ignoredFiles.push(...this.getFiles(ignoredPath));
-				} else {
-					// If it's a single file, just add that file
-					ignoredFiles.push(ignoredPath);
-				}
-			}
+		const instanceRoot = path.resolve(`${this.options.path}${instancePath}`);
+		const excludedRoots = this.getIgnoredRoots(instanceRoot);
+		if (!this.options.instance) {
+			excludedRoots.push(
+				path.resolve(this.options.path, 'loader'),
+				path.resolve(this.options.path, 'runtime')
+			);
 		}
 
-		// Mark bundle paths as ignored (so we don't delete them)
-		bundle.forEach(file => {
-			ignoredFiles.push(file.path);
-		});
-
-		// Filter out all ignored files from the main file list
-		const filesToDelete = allFiles.filter(file => !ignoredFiles.includes(file));
+		// Prune ignored roots while walking instead of enumerating their entire
+		// contents once in allFiles and a second time in ignoredFiles.
+		const allFiles = this.getFiles(instanceRoot, [], excludedRoots);
+		const bundleFiles = new Set(bundle
+			.filter(file => Boolean(file.path))
+			.map(file => this.comparablePath(path.resolve(this.options.path, file.path))));
+		const filesToDelete = allFiles.filter(file => !bundleFiles.has(this.comparablePath(file)));
+		const comparableInstanceRoot = this.comparablePath(instanceRoot);
 
 		// Remove each file or directory
 		for (const filePath of filesToDelete) {
@@ -223,12 +215,14 @@ export default class MinecraftBundle extends EventEmitter {
 					// Clean up empty folders going upward until we hit the main path
 					let currentDir = path.dirname(filePath);
 					while (true) {
-						if (currentDir === this.options.path) break;
+						if (this.comparablePath(currentDir) === comparableInstanceRoot) break;
 						const dirContents = fs.readdirSync(currentDir);
 						if (dirContents.length === 0) {
 							fs.rmSync(currentDir);
 						}
-						currentDir = path.dirname(currentDir);
+						const parentDir = path.dirname(currentDir);
+						if (parentDir === currentDir) break;
+						currentDir = parentDir;
 					}
 				}
 			} catch {
@@ -244,9 +238,16 @@ export default class MinecraftBundle extends EventEmitter {
 	 *
 	 * @param dirPath The starting directory path to walk.
 	 * @param collectedFiles Used internally to store file paths.
+	 * @param excludedRoots Files or directories whose contents must not be inspected.
 	 * @returns The array of all file paths (and empty directories) under dirPath.
 	 */
-	private getFiles(dirPath: string, collectedFiles: string[] = []): string[] {
+	private getFiles(
+		dirPath: string,
+		collectedFiles: string[] = [],
+		excludedRoots: string[] = []
+	): string[] {
+		if (this.isExcludedPath(dirPath, excludedRoots)) return collectedFiles;
+
 		if (fs.existsSync(dirPath)) {
 			const entries = fs.readdirSync(dirPath);
 			// If the directory is empty, store it as a "file" so it can be processed
@@ -255,10 +256,11 @@ export default class MinecraftBundle extends EventEmitter {
 			}
 			// Explore each child entry
 			for (const entry of entries) {
-				const fullPath = `${dirPath}/${entry}`;
+				const fullPath = path.join(dirPath, entry);
+				if (this.isExcludedPath(fullPath, excludedRoots)) continue;
 				const stats = fs.statSync(fullPath);
 				if (stats.isDirectory()) {
-					this.getFiles(fullPath, collectedFiles);
+					this.getFiles(fullPath, collectedFiles, excludedRoots);
 				} else {
 					collectedFiles.push(fullPath);
 				}
